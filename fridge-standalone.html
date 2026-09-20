@@ -218,10 +218,13 @@ button { cursor: pointer; }
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 58px;
+  min-height: 58px;
+  padding: 4px 2px;
+  overflow: hidden;
   border-radius: 12px;
   line-height: 1.1;
 }
+.tag b, .tag small { display: block; white-space: nowrap; }
 .tag b { font-family: var(--font-num); font-weight: 400; font-size: 22px; }
 .tag small { margin-top: 3px; font-size: 12px; font-weight: 500; }
 .t-expired { background: var(--expired-bg); color: var(--expired-fg); }
@@ -269,9 +272,9 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
   align-items: center;
   justify-content: center;
   gap: 1px;
-  width: 48px;
-  height: 52px;
-  padding: 0;
+  min-width: 48px;
+  min-height: 52px;
+  padding: 4px 2px;
   border-radius: 12px;
   border: 1.5px solid var(--line);
   background: var(--surface);
@@ -465,9 +468,9 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
 }
 @media (max-width: 350px) {
   .row { grid-template-columns: 52px minmax(0, 1fr) auto; gap: 8px; }
-  .tag { height: 52px; }
+  .tag { min-height: 52px; }
   .tag b { font-size: 19px; }
-  .act { width: 44px; }
+  .act { min-width: 44px; }
 }
 
 /* alert shortcut */
@@ -557,6 +560,10 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
 .share-pre { margin: 0 0 8px; padding: 10px 12px; overflow-x: auto; white-space: pre; background: var(--bg); border-radius: 12px; color: var(--ink); font-size: 13px; line-height: 1.4; -webkit-user-select: all; user-select: all; }
 .cook-prev summary::after { content: "▾"; margin-left: 6px; }
 .cook-prev[open] summary::after { content: "▴"; }
+
+.fld input[type="date"] { min-width: 0; max-width: 100%; overflow: hidden; }
+.fld input[type="date"]::-webkit-date-and-time-value { text-align: left; min-width: 0; }
+.locbar button, .chips button, .seg button { min-width: 0; }
 
 </style>
 </head>
@@ -866,11 +873,38 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     $('list').innerHTML = h;
   }
 
+  /* ---------- auto-fit text ---------- */
+  function fitText(el, max) {
+    if (!el) return;
+    el.style.fontSize = '';
+    var size = parseFloat(getComputedStyle(el).fontSize) || 16;
+    var n = 0;
+    while (el.scrollWidth > max && size > 9 && n++ < 40) {
+      size -= 0.5;
+      el.style.fontSize = size + 'px';
+    }
+  }
+  function fitAll() {
+    var tags = document.querySelectorAll('.tag');
+    for (var i = 0; i < tags.length; i++) {
+      var max = tags[i].clientWidth - 6;
+      fitText(tags[i].querySelector('b'), max);
+      fitText(tags[i].querySelector('small'), max);
+    }
+    var fe = $('fExp');
+    if (fe && !$('sheet').hidden) {
+      fe.style.fontSize = '';
+      var size = parseFloat(getComputedStyle(fe).fontSize) || 17, n = 0;
+      while (fe.scrollWidth > fe.clientWidth && size > 11 && n++ < 20) { size -= 0.5; fe.style.fontSize = size + 'px'; }
+    }
+  }
+
   function renderAll() {
     renderHead();
     renderAlert();
     renderList();
     renderNotice();
+    fitAll();
   }
 
   /* ---------- toast ---------- */
@@ -1348,6 +1382,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
       $('scrim').classList.add('open');
       $('sheet').classList.add('open');
     });
+    setTimeout(fitAll, 60);
     if (!it) setTimeout(function () { $('fName').focus(); }, 80);
   }
   function closeSheet() {
@@ -1469,6 +1504,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     }
   });
   document.addEventListener('keydown', function (e) { if (e.key === 'Enter' && e.target && e.target.id === 'cookWish') { e.preventDefault(); e.target.blur(); } });
+  $('fExp').addEventListener('change', function () { setTimeout(fitAll, 0); });
   $('fExp').addEventListener('change', function () { $('fErr').hidden = true; syncChips(); });
   $('fName').addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); $('fQty').focus(); } });
   document.addEventListener('keydown', function (e) {
@@ -1480,6 +1516,8 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
 
   /* ---------- start ---------- */
   renderAll();
+  window.addEventListener('resize', fitAll);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitAll);
   setInterval(function () { if (sync && document.visibilityState === 'visible' && !syncBusy) syncNow(); }, 20000);
   if (sync) syncNow();
   window.addEventListener('hashchange', checkHash);
