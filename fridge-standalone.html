@@ -503,19 +503,45 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
 .tip { margin: 8px 0 0; padding: 8px 12px; border-left: 4px solid var(--brand); background: var(--brand-soft); border-radius: 2px 10px 10px 2px; font-size: 14px; }
 
 .fld textarea {
-  display: block;
-  width: 100%;
-  padding: 10px 14px;
-  border: 1.5px solid var(--line);
-  border-radius: 14px;
-  background: var(--bg);
-  font-size: 16px;
-  resize: vertical;
+  display: block; width: 100%; padding: 10px 14px; border: 1.5px solid var(--line); border-radius: 14px;
+  background: var(--bg); font-size: 16px; resize: vertical;
 }
 .fld textarea:focus { border-color: var(--brand); outline: none; box-shadow: 0 0 0 3px var(--brand-soft); }
 .cook-prev { margin: 10px 0 0; font-size: 14px; color: var(--muted); }
 .cook-prev summary { min-height: 40px; display: flex; align-items: center; cursor: pointer; font-weight: 700; }
 .cook-prev pre { margin: 0; padding: 12px; white-space: pre-wrap; word-break: keep-all; background: var(--bg); border-radius: 12px; color: var(--ink); font-family: var(--font-body); font-size: 14px; }
+
+:root { --cold: #1f5fa8; --cold-ink: #ffffff; --cold-soft: #d9e9f8; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --cold: #8fc3f5; --cold-ink: #06213a; --cold-soft: #18344f; }
+}
+:root[data-theme="dark"] { --cold: #8fc3f5; --cold-ink: #06213a; --cold-soft: #18344f; }
+
+.locbar { display: flex; gap: 6px; padding: 2px 4px 4px; }
+.locbar button {
+  flex: 1; min-height: 42px; border-radius: 12px; border: 1.5px solid var(--line);
+  background: var(--surface); font-size: 15px; font-weight: 700; color: var(--muted);
+}
+.locbar button b { font-family: var(--font-num); font-weight: 400; margin-left: 2px; }
+.locbar button[aria-pressed="true"] { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
+.locbar button[data-loc="freezer"][aria-pressed="true"] { background: var(--cold); border-color: var(--cold); color: var(--cold-ink); }
+
+.seg { display: flex; gap: 8px; }
+.seg button {
+  flex: 1; min-height: 50px; border-radius: 14px; border: 1.5px solid var(--line);
+  background: var(--bg); font-size: 17px; font-weight: 700; color: var(--muted);
+}
+.seg button[aria-checked="true"] { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); }
+.seg button[data-loc="freezer"][aria-checked="true"] { background: var(--cold); border-color: var(--cold); color: var(--cold-ink); }
+
+.nmline { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; max-width: 100%; }
+.loc { flex: none; padding: 0 8px; border-radius: 999px; font-size: 12px; font-weight: 700; line-height: 20px; }
+.loc-fridge { background: var(--bg); color: var(--muted); border: 1px solid var(--line); line-height: 18px; }
+.loc-freezer { background: var(--cold-soft); color: var(--cold); border: 1px solid var(--cold-soft); line-height: 18px; }
+.pills em { font-style: normal; font-size: 12px; margin-left: 5px; opacity: 0.95; }
+
+.tag b.long { font-size: 17px; }
+.tag small { white-space: nowrap; }
 
 </style>
 </head>
@@ -565,8 +591,8 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
   function dayDiff(s) { return Math.round((parse(s) - today()) / 86400000); }
   function short(s) {
     var d = parse(s);
-    var y = d.getFullYear() !== today().getFullYear() ? String(d.getFullYear()).slice(2) + '.' : '';
-    return y + (d.getMonth() + 1) + '/' + d.getDate() + '(' + DAYS[d.getDay()] + ')';
+    if (d.getFullYear() !== today().getFullYear()) return String(d.getFullYear()).slice(2) + '.' + (d.getMonth() + 1) + '.' + d.getDate();
+    return (d.getMonth() + 1) + '/' + d.getDate() + '(' + DAYS[d.getDay()] + ')';
   }
   function tone(d) {
     if (d < 0) return 'expired';
@@ -575,9 +601,15 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     if (d <= 7) return 'week';
     return 'fresh';
   }
-  function dlabel(d) { return d === 0 ? '오늘' : d > 0 ? 'D-' + d : 'D+' + (-d); }
+  function dlabel(d) { return d === 0 ? '오늘' : d < 0 ? 'D+' + (-d) : d >= 365 ? Math.floor(d / 365) + '년' : d >= 60 ? Math.round(d / 30) + '개월' : 'D-' + d; }
   function fmtQty(it) { return String(+it.qty) + it.unit; }
   function stepOf(unit) { return STEP[unit] || 1; }
+  var LOC = { fridge: '냉장', freezer: '냉동' };
+  var CHIPS = {
+    fridge: [[3, '3일 후'], [7, '1주 후'], [14, '2주 후'], [30, '1개월 후'], [90, '3개월 후']],
+    freezer: [[30, '1개월 후'], [90, '3개월 후'], [180, '6개월 후'], [365, '1년 후']]
+  };
+  function locOf(it) { return it.loc === 'freezer' ? 'freezer' : 'fridge'; }
 
   function load() {
     try {
@@ -594,6 +626,8 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
   var toastTimer = null;
   var undoFn = null;
   var cookWish = '';
+  var locFilter = 'all';
+  var formLoc = 'fridge';
 
   /* ---------- skeleton ---------- */
   $('app').innerHTML =
@@ -610,6 +644,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
           '<button type="button" role="tab" id="tabCook" data-act="tab" data-tab="cook">요리</button>' +
           '<button type="button" role="tab" id="tabLog" data-act="tab" data-tab="log"></button>' +
         '</div>' +
+        '<div id="locbar" class="locbar" role="group" aria-label="보관 장소 보기" hidden></div>' +
         '<div id="list"></div>' +
       '</div>' +
     '</div>' +
@@ -618,6 +653,10 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     '<div id="sheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" hidden>' +
       '<div class="grab"></div>' +
       '<h2 id="sheetTitle"></h2>' +
+      '<div class="fld"><span id="locLabel">보관 장소</span><div class="seg" role="radiogroup" aria-labelledby="locLabel">' +
+        '<button type="button" role="radio" data-act="loc" data-loc="fridge" aria-checked="true">냉장</button>' +
+        '<button type="button" role="radio" data-act="loc" data-loc="freezer" aria-checked="false">냉동</button>' +
+      '</div></div>' +
       '<label class="fld"><span>음식 이름</span><input id="fName" type="text" maxlength="30" autocomplete="off" autocapitalize="off" enterkeyhint="next" list="foods" placeholder="예: 우유"></label>' +
       '<datalist id="foods"></datalist>' +
       '<div class="fld"><span id="qLabel">수량</span><div class="qrow">' +
@@ -645,9 +684,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     '<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>';
 
   $('fUnit').innerHTML = UNITS.map(function (u) { return '<option value="' + u + '">' + u + '</option>'; }).join('');
-  $('chips').innerHTML = [[3, '3일 후'], [7, '1주 후'], [14, '2주 후'], [30, '1개월 후'], [90, '3개월 후']].map(function (c) {
-    return '<button type="button" data-act="chip" data-days="' + c[0] + '" aria-pressed="false">' + c[1] + '</button>';
-  }).join('');
+  renderChips('fridge');
 
   /* ---------- rendering ---------- */
   function active() { return state.items.filter(function (i) { return i.status === 'active'; }); }
@@ -669,6 +706,18 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     $('tabLog').setAttribute('aria-selected', tab === 'log');
     $('tabCook').setAttribute('aria-selected', tab === 'cook');
     $('fab').hidden = readOnly;
+    renderLocbar();
+  }
+
+  function renderLocbar() {
+    var bar = $('locbar');
+    var act = active();
+    if (tab !== 'fridge' || !act.length) { bar.hidden = true; return; }
+    var nF = act.filter(function (i) { return locOf(i) === 'fridge'; }).length;
+    bar.hidden = false;
+    bar.innerHTML = [['all', '전체', act.length], ['fridge', '냉장', nF], ['freezer', '냉동', act.length - nF]].map(function (x) {
+      return '<button type="button" data-act="locf" data-loc="' + x[0] + '" aria-pressed="' + (locFilter === x[0]) + '">' + x[1] + ' <b>' + x[2] + '</b></button>';
+    }).join('');
   }
 
   function renderAlert() {
@@ -678,7 +727,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     var urgent = act.filter(function (i) { return dayDiff(i.exp) <= 3; });
     if (!urgent.length) {
       var first = act[0];
-      box.innerHTML = '<section class="alert alert-calm"><h2>급하게 먹을 음식이 없어요</h2><p>가장 먼저 볼 음식은 ' + esc(first.name) + '(' + dlabel(dayDiff(first.exp)) + ')이에요.</p>' + cookBtn() + '</section>';
+      box.innerHTML = '<section class="alert alert-calm"><h2>급하게 먹을 음식이 없어요</h2><p>가장 먼저 볼 음식은 ' + esc(first.name) + (locOf(first) === 'freezer' ? '(냉동)' : '') + '(' + dlabel(dayDiff(first.exp)) + ')이에요.</p>' + cookBtn() + '</section>';
       return;
     }
     var exp = urgent.filter(function (i) { return dayDiff(i.exp) < 0; }).length;
@@ -689,7 +738,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     var rest = urgent.length - exp - td;
     if (rest) parts.push('3일 안에 ' + rest + '개');
     var pills = urgent.slice(0, 5).map(function (i) {
-      return '<li>' + esc(i.name) + '<span>' + dlabel(dayDiff(i.exp)) + '</span></li>';
+      return '<li>' + esc(i.name) + (locOf(i) === 'freezer' ? '<em>냉동</em>' : '') + '<span>' + dlabel(dayDiff(i.exp)) + '</span></li>';
     }).join('');
     if (urgent.length > 5) pills += '<li>외 ' + (urgent.length - 5) + '개</li>';
     box.innerHTML = '<section class="alert alert-hot' + (exp ? ' has-expired' : '') + '"><h2>' + parts.join(', ') + '</h2><ul class="pills">' + pills + '</ul>' + cookBtn() + '</section>';
@@ -714,7 +763,8 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
         '<button type="button" class="act act-eat" data-act="eat" data-id="' + it.id + '" aria-label="' + esc(it.name) + ' 먹었어요">' + ICON.check + '먹음</button>' +
         '<button type="button" class="act act-trash" data-act="trash" data-id="' + it.id + '" aria-label="' + esc(it.name) + ' 버렸어요">' + ICON.trash + '버림</button>' +
       '</div>';
-    return '<li class="row"><div class="tag t-' + tone(d) + '"><b>' + dlabel(d) + '</b><small>' + short(it.exp) + '</small></div><div class="what">' + name + qty + '</div>' + acts + '</li>';
+    var badge = locFilter === 'all' ? '<span class="loc loc-' + locOf(it) + '">' + LOC[locOf(it)] + '</span>' : '';
+    return '<li class="row"><div class="tag t-' + tone(d) + '"><b' + (dlabel(d).length > 4 ? ' class="long"' : '') + '>' + dlabel(d) + '</b><small>' + short(it.exp) + '</small></div><div class="what"><div class="nmline">' + name + badge + '</div>' + qty + '</div>' + acts + '</li>';
   }
 
   function doneRowHtml(it) {
@@ -732,9 +782,11 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     var box = $('list');
     if (tab === 'cook') { renderCook(); return; }
     if (tab === 'fridge') {
-      var act = active().sort(byExp);
+      var act = active().filter(function (i) { return locFilter === 'all' || locOf(i) === locFilter; }).sort(byExp);
       if (!act.length) {
-        box.innerHTML = '<div class="empty">' + ICON.fridgeBig + '<h3>냉장고가 비어 있어요</h3><p>' + (readOnly ? '아직 등록된 음식이 없어요.' : '아래 “음식 추가”로 첫 음식을 넣어 보세요. 소비기한이 가까운 음식이 위에 모여요.') + '</p></div>';
+        var title = locFilter === 'freezer' ? '냉동실이 비어 있어요' : locFilter === 'fridge' ? '냉장실이 비어 있어요' : '냉장고가 비어 있어요';
+        var hint = locFilter === 'all' ? '아래 “음식 추가”로 첫 음식을 넣어 보세요. 소비기한이 가까운 음식이 위에 모여요.' : '“음식 추가”에서 보관 장소를 ' + LOC[locFilter] + '으로 골라 넣어 보세요.';
+        box.innerHTML = '<div class="empty">' + ICON.fridgeBig + '<h3>' + title + '</h3><p>' + hint + '</p></div>';
         return;
       }
       var html = '';
@@ -760,9 +812,10 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     return active().filter(function (i) { return dayDiff(i.exp) >= 0; }).sort(byExp);
   }
   function cookPrompt(use) {
+    var hasFz = use.some(function (i) { return locOf(i) === 'freezer'; });
     var lines = use.map(function (i) {
       var d = dayDiff(i.exp);
-      return '- ' + i.name + ' ' + fmtQty(i) + ' (' + (d === 0 ? '오늘까지' : d + '일 남음') + ')';
+      return '- ' + i.name + ' ' + fmtQty(i) + (locOf(i) === 'freezer' ? ' [냉동]' : '') + ' (' + (d === 0 ? '오늘까지' : d + '일 남음') + ')';
     }).join('\n');
     var wish = cookWish.trim().replace(/[\r\n]+/g, ' ').slice(0, 60);
     return '우리 집 냉장고에 있는 재료로 만들 수 있는 요리 3가지를 추천해 주세요.\n\n' +
@@ -771,6 +824,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
       '조건:\n' +
       '- 소비기한이 가까운 재료를 먼저 쓰는 요리로 골라 주세요.\n' +
       '- 물, 소금, 설탕, 후추, 식용유, 간장, 참기름은 집에 있어요. 그 밖에 더 필요한 재료는 따로 알려 주세요.\n' +
+      (hasFz ? '- [냉동] 표시 재료는 해동해서 쓴다고 생각하고, 해동 방법도 한 줄로 알려 주세요.\n' : '') +
       '- 요리마다 조리 시간, 쓰는 재료, 만드는 순서(3~5단계)를 알려 주세요.';
   }
   function renderCook() {
@@ -865,7 +919,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     var st = r.status === 'eaten' || r.status === 'trashed' ? r.status : 'active';
     var qty = parseFloat(r.qty);
     if (!r.id || !r.name || !(qty > 0) || !/^\d{4}-\d{2}-\d{2}$/.test(String(r.exp))) return null;
-    var out = { id: String(r.id).slice(0, 40), name: String(r.name).slice(0, 30), qty: qty, unit: UNITS.indexOf(r.unit) >= 0 ? r.unit : '개', exp: String(r.exp), status: st, addedAt: /^\d{4}-\d{2}-\d{2}$/.test(String(r.addedAt)) ? String(r.addedAt) : iso(today()) };
+    var out = { id: String(r.id).slice(0, 40), name: String(r.name).slice(0, 30), qty: qty, unit: UNITS.indexOf(r.unit) >= 0 ? r.unit : '개', exp: String(r.exp), loc: r.loc === 'freezer' ? 'freezer' : 'fridge', status: st, addedAt: /^\d{4}-\d{2}-\d{2}$/.test(String(r.addedAt)) ? String(r.addedAt) : iso(today()) };
     if (st !== 'active') out.doneAt = /^\d{4}-\d{2}-\d{2}$/.test(String(r.doneAt)) ? String(r.doneAt) : iso(today());
     return out;
   }
@@ -883,6 +937,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
       var c = cleanItem(r);
       if (!c) return;
       var cur = find(c.id);
+      if (cur && !r.loc) c.loc = locOf(cur);
       if (cur) { state.items[state.items.indexOf(cur)] = c; } else { state.items.push(c); }
       n++;
     });
@@ -935,6 +990,19 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     });
     $('foods').innerHTML = opts.join('');
   }
+  function renderChips(loc) {
+    $('chips').innerHTML = CHIPS[loc].map(function (c) {
+      return '<button type="button" data-act="chip" data-days="' + c[0] + '" aria-pressed="false">' + c[1] + '</button>';
+    }).join('');
+  }
+  function setLoc(loc) {
+    formLoc = loc === 'freezer' ? 'freezer' : 'fridge';
+    var btns = document.querySelectorAll('#sheet [data-act="loc"]');
+    for (var i = 0; i < btns.length; i++) btns[i].setAttribute('aria-checked', btns[i].getAttribute('data-loc') === formLoc ? 'true' : 'false');
+    renderChips(formLoc);
+    syncChips();
+    if (!editingId) $('fSave').textContent = formLoc === 'freezer' ? '냉동실에 넣기' : '냉장실에 넣기';
+  }
   function syncChips() {
     var v = $('fExp').value;
     var btns = $('chips').querySelectorAll('button');
@@ -955,6 +1023,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     var it = id ? find(id) : null;
     editingId = it ? it.id : null;
     fillSuggestions();
+    formLoc = it ? locOf(it) : (locFilter === 'freezer' ? 'freezer' : 'fridge');
     $('sheetTitle').textContent = it ? '음식 수정' : '음식 추가';
     $('fName').value = it ? it.name : '';
     $('fQty').value = it ? String(+it.qty) : '1';
@@ -963,7 +1032,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     $('fSave').textContent = it ? '수정 저장' : '냉장고에 넣기';
     $('fDelete').hidden = !it;
     $('fErr').hidden = true;
-    syncChips();
+    setLoc(formLoc);
     $('scrim').hidden = false;
     $('sheet').hidden = false;
     document.body.classList.add('lock');
@@ -1000,11 +1069,11 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     if (!/^\d{4}-\d{2}-\d{2}$/.test(exp)) return showErr('소비기한을 골라 주세요.', 'fExp');
     if (editingId) {
       var it = find(editingId);
-      if (it) { it.name = name; it.qty = qty; it.unit = unit; it.exp = exp; }
+      if (it) { it.name = name; it.qty = qty; it.unit = unit; it.exp = exp; it.loc = formLoc; }
       toast(name + ' 수정했어요');
     } else {
-      state.items.push({ id: uid(), name: name, qty: qty, unit: unit, exp: exp, status: 'active', addedAt: iso(today()) });
-      toast(name + ' 냉장고에 넣었어요');
+      state.items.push({ id: uid(), name: name, qty: qty, unit: unit, exp: exp, loc: formLoc, status: 'active', addedAt: iso(today()) });
+      toast(name + ' ' + LOC[formLoc] + '실에 넣었어요');
     }
     closeSheet();
     commit();
@@ -1033,6 +1102,8 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
         break;
       case 'remove': removeItem(id, true); break;
       case 'undo': var fn = undoFn; undoFn = null; $('toast').hidden = true; if (fn) fn(); break;
+      case 'loc': setLoc(el.getAttribute('data-loc')); break;
+      case 'locf': locFilter = el.getAttribute('data-loc'); renderAll(); break;
       case 'chip':
         var d = today();
         d.setDate(d.getDate() + (+el.getAttribute('data-days')));
