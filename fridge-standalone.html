@@ -543,6 +543,13 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
 .tag b.long { font-size: 17px; }
 .tag small { white-space: nowrap; }
 
+.sync-line { margin: 0 0 12px; font-weight: 700; color: var(--brand); }
+.share-note { margin: 0 0 10px; font-size: 14px; color: var(--muted); }
+.share-note b { word-break: break-all; user-select: all; -webkit-user-select: all; color: var(--ink); }
+.cook-prev .cook-go { margin-top: 6px; }
+
+.share-msg { font-weight: 700; color: var(--brand); }
+
 </style>
 </head>
 <body>
@@ -628,13 +635,22 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
   var cookWish = '';
   var locFilter = 'all';
   var formLoc = 'fridge';
+  var API = 'https://jsonblob.com/api/jsonBlob';
+  var SYNC_KEY = 'fridge-sync-v1';
+  var sync = loadSync();
+  var syncStatus = sync ? 'idle' : 'off';
+  var lastSync = 0;
+  var syncBusy = false;
+  var syncAgain = false;
+  var syncTimer = null;
+  var pendingJoin = null;
 
   /* ---------- skeleton ---------- */
   $('app').innerHTML =
     '<div class="wrap">' +
       '<header class="top">' +
         '<div class="brand">' + ICON.fridge + '<div><h1>우리 집 냉장고</h1><p id="dateLine"></p></div></div>' +
-        '<button type="button" class="sync" data-act="share-open">주고받기</button>' +
+        '<button type="button" id="syncBtn" class="sync" data-act="share-open">가족과 공유</button>' +
       '</header>' +
       '<div id="ro" class="ro" role="status" hidden></div>' +
       '<div id="alert"></div>' +
@@ -673,12 +689,8 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     '</div>' +
     '<div id="sheet2" class="sheet" role="dialog" aria-modal="true" aria-labelledby="shareTitle" hidden>' +
       '<div class="grab"></div>' +
-      '<h2 id="shareTitle">가족과 주고받기</h2>' +
-      '<p class="cook-p">이 냉장고는 이 폰에만 저장돼요. 내용을 보내고 받으면 가족 폰의 냉장고와 합칠 수 있어요.</p>' +
-      '<button type="button" class="btn primary cook-go" data-act="export">내 냉장고 보내기</button>' +
-      '<label class="fld"><span>받은 내용 붙여넣기</span><textarea id="shareTa" rows="4" placeholder="가족이 보낸 내용을 여기에 붙여넣으세요"></textarea></label>' +
-      '<button type="button" class="btn cook-go" data-act="import">받은 내용 합치기</button>' +
-      '<p id="shareMsg" class="cook-p" role="status" hidden></p>' +
+      '<h2 id="shareTitle">가족과 함께 쓰기</h2>' +
+      '<div id="shareBody"></div>' +
       '<button type="button" class="btn cook-go" data-act="close">닫기</button>' +
     '</div>' +
     '<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>';
@@ -689,7 +701,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
   /* ---------- rendering ---------- */
   function active() { return state.items.filter(function (i) { return i.status === 'active'; }); }
   function done() {
-    return state.items.filter(function (i) { return i.status !== 'active'; })
+    return state.items.filter(function (i) { return i.status === 'eaten' || i.status === 'trashed'; })
       .sort(function (a, b) { return a.doneAt < b.doneAt ? 1 : a.doneAt > b.doneAt ? -1 : 0; });
   }
   function byExp(a, b) {
@@ -707,6 +719,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     $('tabCook').setAttribute('aria-selected', tab === 'cook');
     $('fab').hidden = readOnly;
     renderLocbar();
+    renderSyncBtn();
   }
 
   function renderLocbar() {
@@ -872,15 +885,17 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
   }
   function prune() {
     var d = done();
-    if (d.length <= 80) return;
+    var cutoff = Date.now() - 30 * 86400000;
     var drop = {};
     d.slice(80).forEach(function (i) { drop[i.id] = true; });
-    state.items = state.items.filter(function (i) { return !drop[i.id]; });
+    state.items = state.items.map(function (i) { return drop[i.id] ? { id: i.id, status: 'deleted', u: Date.now() } : i; })
+      .filter(function (i) { return !(i.status === 'deleted' && (i.u || 0) < cutoff); });
   }
   function commit() {
     prune();
     persist();
     renderAll();
+    if (sync) scheduleSync(1200);
   }
   function copyText(t) {
     if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(t);
@@ -899,13 +914,198 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
 
   /* ---------- family exchange ---------- */
   function openShare() {
-    $('shareTa').value = '';
-    $('shareMsg').hidden = true;
+    renderShareSheet();
     $('scrim').hidden = false;
     $('sheet2').hidden = false;
     document.body.classList.add('lock');
     requestAnimationFrame(function () { $('scrim').classList.add('open'); $('sheet2').classList.add('open'); });
   }
+  function showShareMsg(t) {
+    var m = $('shareMsg');
+    if (!m) return;
+    m.textContent = t;
+    m.hidden = !t;
+  }
+  function fmtAgo(ts) {
+    if (!ts) return '아직 안 했어요';
+    var s = Math.round((Date.now() - ts) / 1000);
+    if (s < 30) return '방금';
+    if (s < 3600) return Math.round(s / 60) + '분 전';
+    return Math.round(s / 3600) + '시간 전';
+  }
+  function renderShareSheet() {
+    var n = active().length;
+    var h = '<p id="shareMsg" class="cook-p share-msg" role="status" hidden></p>';
+    if (pendingJoin) {
+      h += '<p class="cook-p">가족이 보낸 냉장고에 참여할까요?' + (n ? ' 이 폰에 넣어 둔 음식 ' + n + '개도 함께 합쳐져요.' : '') + '</p>' +
+        '<button type="button" class="btn primary cook-go" data-act="sync-confirm">참여하기</button>' +
+        '<button type="button" class="btn cook-go" data-act="sync-later">나중에</button>';
+    } else if (sync) {
+      h += '<p id="syncLine" class="sync-line"></p>' +
+        (syncStatus === 'missing' ? '<button type="button" class="btn primary cook-go" data-act="sync-start">새로 공유 시작</button>' : '<button type="button" class="btn primary cook-go" data-act="sync-invite">가족에게 링크 보내기</button>') +
+        '<button type="button" class="btn cook-go" data-act="sync-now">지금 동기화</button>' +
+        '<p class="share-note">링크를 아는 사람은 누구나 이 냉장고를 보고 고칠 수 있어요. 가족에게만 보내세요.</p>' +
+        '<p class="share-note">공유 코드: <b>' + esc(sync.id) + '</b></p>' +
+        '<button type="button" class="linkdanger" data-act="sync-off">공유 끄기 (이 폰의 내용은 남아요)</button>';
+    } else {
+      h += '<p class="cook-p">가족이 같은 냉장고를 함께 보고 고칠 수 있어요. 로그인은 필요 없어요.</p>' +
+        '<button type="button" class="btn primary cook-go" data-act="sync-start">가족 공유 시작하기</button>' +
+        '<label class="fld"><span>가족이 보낸 링크나 코드</span><input id="joinCode" type="text" autocomplete="off" autocapitalize="off" placeholder="링크를 붙여넣으세요"></label>' +
+        '<button type="button" class="btn cook-go" data-act="sync-join">참여하기</button>' +
+        '<details class="cook-prev"><summary>공유 시작이 안 될 때</summary><p class="share-note">1. Safari에서 jsonblob.com을 열고 아무 내용이나 저장하세요. 2. 저장한 뒤 주소창의 주소를 복사해 위 칸에 붙여넣고 참여하기를 누르세요.</p></details>';
+    }
+    h += '<details class="cook-prev"><summary>공유 없이 직접 주고받기</summary>' +
+        '<button type="button" class="btn cook-go" data-act="export">내 냉장고 보내기</button>' +
+        '<label class="fld"><span>받은 내용 붙여넣기</span><textarea id="shareTa" rows="4" placeholder="가족이 보낸 내용을 여기에 붙여넣으세요"></textarea></label>' +
+        '<button type="button" class="btn cook-go" data-act="import">받은 내용 합치기</button>' +
+      '</details>';
+    $('shareBody').innerHTML = h;
+    updateSyncLine();
+  }
+  function updateSyncLine() {
+    var el = $('syncLine');
+    if (!el) return;
+    el.textContent = syncStatus === 'error' ? '연결이 잘 안 돼요. 인터넷을 확인하고 “지금 동기화”를 눌러 보세요.' :
+      syncStatus === 'missing' ? '공유 저장소에서 내용이 사라졌어요. 오래 열지 않으면 지워져요. “새로 공유 시작”으로 다시 만드세요.' :
+      syncStatus === 'busy' ? '동기화하는 중이에요…' : '가족 공유 중, 마지막 동기화 ' + fmtAgo(lastSync);
+  }
+  function renderSyncBtn() {
+    var b = $('syncBtn');
+    if (!b) return;
+    var t = '가족과 공유', c = 'sync';
+    if (sync) {
+      if (syncStatus === 'busy') t = '동기화 중…';
+      else if (syncStatus === 'error' || syncStatus === 'missing') { t = '공유 오류'; c += ' err'; }
+      else t = '가족 공유 중';
+    }
+    b.textContent = t;
+    b.className = c;
+  }
+  function setSyncStatus(s) {
+    var prev = syncStatus;
+    syncStatus = s;
+    renderSyncBtn();
+    if (!$('sheet2').hidden && (prev === 'missing' || s === 'missing')) renderShareSheet(); else updateSyncLine();
+  }
+
+  /* ---------- family sync (shared online storage) ---------- */
+  function loadSync() {
+    try {
+      var s = JSON.parse(localStorage.getItem(SYNC_KEY));
+      if (s && /^[\w-]{6,64}$/.test(s.id)) return { id: s.id };
+    } catch (e) {}
+    return null;
+  }
+  function saveSync() {
+    try { if (sync) localStorage.setItem(SYNC_KEY, JSON.stringify(sync)); else localStorage.removeItem(SYNC_KEY); } catch (e) {}
+  }
+  function parseCode(t) {
+    t = String(t || '').trim();
+    var m = t.match(/(?:join=|jsonblob\/|jsonblob\.com\/)([\w-]{6,64})/i);
+    if (m) return m[1];
+    return /^[\w-]{6,64}$/.test(t) ? t : null;
+  }
+  function api(method, id, body) {
+    var ctl = new AbortController();
+    var t = setTimeout(function () { ctl.abort(); }, 12000);
+    var opt = { method: method, headers: { 'Accept': 'application/json' }, signal: ctl.signal, cache: 'no-store' };
+    if (body !== undefined) { opt.headers['Content-Type'] = 'application/json'; opt.body = JSON.stringify(body); }
+    return fetch(API + (id ? '/' + id : ''), opt).then(function (r) { clearTimeout(t); return r; }, function (e) { clearTimeout(t); throw e; });
+  }
+  function payload() { return { app: 'fridge', v: 2, items: state.items }; }
+  function cleanRemote(d) {
+    if (!d || typeof d !== 'object' || Array.isArray(d)) return null;
+    var out = [];
+    (Array.isArray(d.items) ? d.items : []).forEach(function (r) { var c = cleanItem(r); if (c) out.push(c); });
+    return out;
+  }
+  function mergeItems(local, remote) {
+    var map = {}, changed = false;
+    local.forEach(function (i) { map[i.id] = i; });
+    remote.forEach(function (r) {
+      var l = map[r.id];
+      if (!l || (r.u || 0) > (l.u || 0)) { map[r.id] = r; changed = true; }
+    });
+    var cutoff = Date.now() - 30 * 86400000;
+    var out = Object.keys(map).map(function (k) { return map[k]; }).filter(function (i) { return !(i.status === 'deleted' && (i.u || 0) < cutoff); });
+    return { items: out, changed: changed };
+  }
+  function sig(items) { return items.map(function (i) { return i.id + ':' + (i.u || 0); }).sort().join('|'); }
+  function scheduleSync(ms) { clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, ms); }
+  function syncNow() {
+    if (!sync) return Promise.resolve();
+    if (syncBusy) { syncAgain = true; return Promise.resolve(); }
+    syncBusy = true;
+    setSyncStatus('busy');
+    var id = sync.id;
+    return api('GET', id).then(function (r) {
+      if (r.status === 404) return { missing: true };
+      if (!r.ok) throw new Error('get ' + r.status);
+      return r.json().then(function (d) { return { data: d }; });
+    }).then(function (res) {
+      if (res.missing) { setSyncStatus('missing'); return; }
+      var remote = cleanRemote(res.data);
+      if (!remote) throw new Error('bad data');
+      var m = mergeItems(state.items, remote);
+      state.items = m.items;
+      if (m.changed) { persist(); renderAll(); if (lastSync) toast('가족이 바꾼 내용을 불러왔어요'); }
+      if (sig(m.items) !== sig(remote)) {
+        return api('PUT', id, payload()).then(function (r) { if (!r.ok) throw new Error('put ' + r.status); });
+      }
+    }).then(function () {
+      if (syncStatus !== 'missing') { lastSync = Date.now(); setSyncStatus('idle'); }
+    }).catch(function () {
+      setSyncStatus('error');
+    }).then(function () {
+      syncBusy = false;
+      if (syncAgain) { syncAgain = false; scheduleSync(300); }
+    });
+  }
+  function stampAll() { state.items.forEach(function (i) { if (!i.u) i.u = Date.now(); }); persist(); }
+  function startShare() {
+    showShareMsg('공유를 준비하고 있어요…');
+    stampAll();
+    api('POST', null, payload()).then(function (r) {
+      if (!r.ok) throw new Error('post ' + r.status);
+      var id = parseCode(String(r.headers.get('Location') || r.headers.get('X-jsonblob') || '').split('/').pop());
+      if (!id) throw new Error('noid');
+      sync = { id: id };
+      saveSync();
+      lastSync = Date.now();
+      setSyncStatus('idle');
+      renderShareSheet();
+      showShareMsg('가족 공유를 시작했어요. “가족에게 링크 보내기”를 눌러 보내세요.');
+    }).catch(function (e) {
+      showShareMsg(e && e.message === 'noid' ? '공유 주소를 받지 못했어요. 아래 “공유 시작이 안 될 때”를 따라 해 보세요.' : '공유 저장소에 연결하지 못했어요. 인터넷을 확인하고 잠시 뒤 다시 눌러 주세요.');
+    });
+  }
+  function joinShare(id) {
+    var prev = sync;
+    stampAll();
+    sync = { id: id };
+    pendingJoin = null;
+    clearHash();
+    lastSync = 0;
+    renderShareSheet();
+    showShareMsg('가족 냉장고에 연결하고 있어요…');
+    syncNow().then(function () {
+      if (syncStatus === 'idle') { saveSync(); renderShareSheet(); showShareMsg('연결됐어요. 가족의 냉장고와 합쳤어요.'); return; }
+      sync = prev;
+      saveSync();
+      setSyncStatus(prev ? 'idle' : 'off');
+      renderShareSheet();
+      showShareMsg('연결하지 못했어요. 링크나 코드, 인터넷을 확인해 주세요.');
+    });
+  }
+  function clearHash() { try { history.replaceState(null, '', location.pathname + location.search); } catch (e) {} }
+  function checkHash() {
+    var m = String(location.hash || '').match(/join=([\w-]{6,64})/);
+    if (!m) return;
+    if (sync && sync.id === m[1]) { clearHash(); return; }
+    pendingJoin = m[1];
+    openShare();
+  }
+
   function exportData() {
     var txt = 'FRIDGE1:' + JSON.stringify({ v: 1, items: state.items });
     if (navigator.share) {
@@ -915,11 +1115,13 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     }
   }
   function cleanItem(r) {
-    if (!r || typeof r !== 'object') return null;
+    if (!r || typeof r !== 'object' || !r.id) return null;
+    if (r.status === 'deleted') return { id: String(r.id).slice(0, 40), status: 'deleted', u: Number(r.u) || 0 };
     var st = r.status === 'eaten' || r.status === 'trashed' ? r.status : 'active';
     var qty = parseFloat(r.qty);
     if (!r.id || !r.name || !(qty > 0) || !/^\d{4}-\d{2}-\d{2}$/.test(String(r.exp))) return null;
     var out = { id: String(r.id).slice(0, 40), name: String(r.name).slice(0, 30), qty: qty, unit: UNITS.indexOf(r.unit) >= 0 ? r.unit : '개', exp: String(r.exp), loc: r.loc === 'freezer' ? 'freezer' : 'fridge', status: st, addedAt: /^\d{4}-\d{2}-\d{2}$/.test(String(r.addedAt)) ? String(r.addedAt) : iso(today()) };
+    out.u = Number(r.u) || 0;
     if (st !== 'active') out.doneAt = /^\d{4}-\d{2}-\d{2}$/.test(String(r.doneAt)) ? String(r.doneAt) : iso(today());
     return out;
   }
@@ -936,16 +1138,18 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     data.items.forEach(function (r) {
       var c = cleanItem(r);
       if (!c) return;
+      if (!c.u) c.u = Date.now();
       var cur = find(c.id);
-      if (cur && !r.loc) c.loc = locOf(cur);
-      if (cur) { state.items[state.items.indexOf(cur)] = c; } else { state.items.push(c); }
-      n++;
+      if (cur && !r.loc && c.status !== 'deleted') c.loc = locOf(cur);
+      if (!cur) { state.items.push(c); n++; }
+      else if (c.u > (cur.u || 0)) { state.items[state.items.indexOf(cur)] = c; n++; }
     });
     commit();
-    msg.textContent = n + '개를 합쳤어요. 삭제한 음식은 합치면 다시 나타날 수 있어요.';
+    msg.textContent = n + '개를 합쳤어요.';
   }
 
   /* ---------- actions ---------- */
+  function touch(it) { it.u = Date.now(); }
   function find(id) { for (var i = 0; i < state.items.length; i++) if (state.items[i].id === id) return state.items[i]; return null; }
 
   function finish(id, status) {
@@ -953,10 +1157,12 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     if (!it || readOnly) return;
     it.status = status;
     it.doneAt = iso(today());
+    touch(it);
     commit();
     toast(it.name + ' ' + (status === 'eaten' ? '먹음' : '버림') + '으로 처리했어요', function () {
       it.status = 'active';
       delete it.doneAt;
+      touch(it);
       commit();
     });
   }
@@ -968,6 +1174,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     var next = Math.round((+it.qty + dir * step) * 100) / 100;
     if (next <= 0) return;
     it.qty = next;
+    touch(it);
     commit();
   }
 
@@ -975,17 +1182,22 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     var it = find(id);
     if (!it || readOnly) return;
     var idx = state.items.indexOf(it);
-    state.items.splice(idx, 1);
+    state.items[idx] = { id: it.id, status: 'deleted', u: Date.now() };
     commit();
     if (withUndo) {
-      toast('“' + it.name + '” 삭제했어요', function () { state.items.splice(idx, 0, it); commit(); });
+      toast('“' + it.name + '” 삭제했어요', function () {
+        var cur = find(it.id);
+        touch(it);
+        if (cur) state.items[state.items.indexOf(cur)] = it; else state.items.push(it);
+        commit();
+      });
     }
   }
 
   /* ---------- sheet ---------- */
   function fillSuggestions() {
     var seen = {}, opts = [];
-    state.items.map(function (i) { return i.name; }).concat(SUGGEST).forEach(function (n) {
+    state.items.map(function (i) { return i.name; }).filter(Boolean).concat(SUGGEST).forEach(function (n) {
       if (!seen[n]) { seen[n] = true; opts.push('<option value="' + esc(n) + '">'); }
     });
     $('foods').innerHTML = opts.join('');
@@ -1044,6 +1256,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
   }
   function closeSheet() {
     editingId = null;
+    if (pendingJoin) { pendingJoin = null; clearHash(); }
     $('sheet').classList.remove('open');
     $('sheet2').classList.remove('open');
     $('scrim').classList.remove('open');
@@ -1069,10 +1282,10 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     if (!/^\d{4}-\d{2}-\d{2}$/.test(exp)) return showErr('소비기한을 골라 주세요.', 'fExp');
     if (editingId) {
       var it = find(editingId);
-      if (it) { it.name = name; it.qty = qty; it.unit = unit; it.exp = exp; it.loc = formLoc; }
+      if (it) { it.name = name; it.qty = qty; it.unit = unit; it.exp = exp; it.loc = formLoc; touch(it); }
       toast(name + ' 수정했어요');
     } else {
-      state.items.push({ id: uid(), name: name, qty: qty, unit: unit, exp: exp, loc: formLoc, status: 'active', addedAt: iso(today()) });
+      state.items.push({ id: uid(), name: name, qty: qty, unit: unit, exp: exp, loc: formLoc, status: 'active', addedAt: iso(today()), u: Date.now() });
       toast(name + ' ' + LOC[formLoc] + '실에 넣었어요');
     }
     closeSheet();
@@ -1098,7 +1311,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
       case 'dec': bump(id, -1); break;
       case 'restore':
         var r = find(id);
-        if (r && !readOnly) { r.status = 'active'; delete r.doneAt; commit(); toast(r.name + ' 냉장고로 되돌렸어요'); }
+        if (r && !readOnly) { r.status = 'active'; delete r.doneAt; touch(r); commit(); toast(r.name + ' 냉장고로 되돌렸어요'); }
         break;
       case 'remove': removeItem(id, true); break;
       case 'undo': var fn = undoFn; undoFn = null; $('toast').hidden = true; if (fn) fn(); break;
@@ -1128,6 +1341,23 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
         break;
       case 'share-open': openShare(); break;
       case 'export': exportData(); break;
+      case 'sync-start': startShare(); break;
+      case 'sync-join':
+        var jid = parseCode($('joinCode') && $('joinCode').value);
+        if (jid) joinShare(jid); else showShareMsg('링크나 코드를 확인해 주세요.');
+        break;
+      case 'sync-confirm': joinShare(pendingJoin); break;
+      case 'sync-later': pendingJoin = null; clearHash(); renderShareSheet(); break;
+      case 'sync-now': syncNow().then(function () { showShareMsg(syncStatus === 'idle' ? '동기화했어요.' : ''); }); break;
+      case 'sync-invite':
+        var url = location.href.split('#')[0] + '#join=' + sync.id;
+        if (navigator.share) navigator.share({ title: '우리 집 냉장고', text: '우리 집 냉장고를 같이 봐요', url: url }).catch(function () {});
+        else copyText(url).then(function () { toast('링크를 복사했어요. 가족에게 붙여넣어 보내세요'); }).catch(function () { toast('복사하지 못했어요'); });
+        break;
+      case 'sync-off':
+        sync = null; saveSync(); setSyncStatus('off'); renderShareSheet();
+        showShareMsg('공유를 껐어요. 이 폰의 내용은 그대로 남아 있어요.');
+        break;
       case 'import': importData(); break;
     }
   });
@@ -1145,11 +1375,15 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     if (e.key === 'Escape' && (!$('sheet').hidden || !$('sheet2').hidden)) closeSheet();
   });
   document.addEventListener('visibilitychange', function () {
-    if (document.visibilityState === 'visible') { state = load(); renderAll(); }
+    if (document.visibilityState === 'visible') { state = load(); renderAll(); if (sync) syncNow(); }
   });
 
   /* ---------- start ---------- */
   renderAll();
+  setInterval(function () { if (sync && document.visibilityState === 'visible' && !syncBusy) syncNow(); }, 20000);
+  if (sync) syncNow();
+  window.addEventListener('hashchange', checkHash);
+  checkHash();
 })();
 
 </script>
