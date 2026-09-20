@@ -565,6 +565,17 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
 .fld input[type="date"]::-webkit-date-and-time-value { text-align: left; min-width: 0; }
 .locbar button, .chips button, .seg button { min-width: 0; }
 
+:root { --warm: #8a5a12; --warm-ink: #ffffff; --warm-soft: #f3e4c8; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --warm: #e6b866; --warm-ink: #2b1c05; --warm-soft: #3a2c14; }
+}
+:root[data-theme="dark"] { --warm: #e6b866; --warm-ink: #2b1c05; --warm-soft: #3a2c14; }
+.locbar button[data-loc="pantry"][aria-pressed="true"] { background: var(--warm); border-color: var(--warm); color: var(--warm-ink); }
+.seg button[data-loc="pantry"][aria-checked="true"] { background: var(--warm); border-color: var(--warm); color: var(--warm-ink); }
+.loc-pantry { background: var(--warm-soft); color: var(--warm); border: 1px solid var(--warm-soft); line-height: 18px; }
+.locbar { gap: 5px; }
+.locbar button { font-size: 14px; padding: 0 2px; }
+
 </style>
 </head>
 <body>
@@ -626,12 +637,14 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
   function dlabel(d) { return d === 0 ? '오늘' : d < 0 ? 'D+' + (-d) : d >= 365 ? Math.floor(d / 365) + '년' : d >= 60 ? Math.round(d / 30) + '개월' : 'D-' + d; }
   function fmtQty(it) { return String(+it.qty) + it.unit; }
   function stepOf(unit) { return STEP[unit] || 1; }
-  var LOC = { fridge: '냉장', freezer: '냉동' };
+  var LOC = { fridge: '냉장', freezer: '냉동', pantry: '실온' };
+  var LOCPUT = { fridge: '냉장실에', freezer: '냉동실에', pantry: '실온에' };
   var CHIPS = {
     fridge: [[3, '3일 후'], [7, '1주 후'], [14, '2주 후'], [30, '1개월 후'], [90, '3개월 후']],
-    freezer: [[30, '1개월 후'], [90, '3개월 후'], [180, '6개월 후'], [365, '1년 후']]
+    freezer: [[30, '1개월 후'], [90, '3개월 후'], [180, '6개월 후'], [365, '1년 후']],
+    pantry: [[7, '1주 후'], [14, '2주 후'], [30, '1개월 후'], [90, '3개월 후'], [180, '6개월 후']]
   };
-  function locOf(it) { return it.loc === 'freezer' ? 'freezer' : 'fridge'; }
+  function locOf(it) { return LOC[it.loc] ? it.loc : 'fridge'; }
 
   function load() {
     try {
@@ -689,6 +702,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
       '<div class="fld"><span id="locLabel">보관 장소</span><div class="seg" role="radiogroup" aria-labelledby="locLabel">' +
         '<button type="button" role="radio" data-act="loc" data-loc="fridge" aria-checked="true">냉장</button>' +
         '<button type="button" role="radio" data-act="loc" data-loc="freezer" aria-checked="false">냉동</button>' +
+        '<button type="button" role="radio" data-act="loc" data-loc="pantry" aria-checked="false">실온</button>' +
       '</div></div>' +
       '<label class="fld"><span>음식 이름</span><input id="fName" type="text" maxlength="30" autocomplete="off" autocapitalize="off" enterkeyhint="next" list="foods" placeholder="예: 우유"></label>' +
       '<datalist id="foods"></datalist>' +
@@ -743,9 +757,10 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     var bar = $('locbar');
     var act = active();
     if (tab !== 'fridge' || !act.length) { bar.hidden = true; return; }
-    var nF = act.filter(function (i) { return locOf(i) === 'fridge'; }).length;
+    var cnt = { fridge: 0, freezer: 0, pantry: 0 };
+    act.forEach(function (i) { cnt[locOf(i)]++; });
     bar.hidden = false;
-    bar.innerHTML = [['all', '전체', act.length], ['fridge', '냉장', nF], ['freezer', '냉동', act.length - nF]].map(function (x) {
+    bar.innerHTML = [['all', '전체', act.length], ['fridge', '냉장', cnt.fridge], ['freezer', '냉동', cnt.freezer], ['pantry', '실온', cnt.pantry]].map(function (x) {
       return '<button type="button" data-act="locf" data-loc="' + x[0] + '" aria-pressed="' + (locFilter === x[0]) + '">' + x[1] + ' <b>' + x[2] + '</b></button>';
     }).join('');
   }
@@ -757,7 +772,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     var urgent = act.filter(function (i) { return dayDiff(i.exp) <= 3; });
     if (!urgent.length) {
       var first = act[0];
-      box.innerHTML = '<section class="alert alert-calm"><h2>급하게 먹을 음식이 없어요</h2><p>가장 먼저 볼 음식은 ' + esc(first.name) + (locOf(first) === 'freezer' ? '(냉동)' : '') + '(' + dlabel(dayDiff(first.exp)) + ')이에요.</p>' + cookBtn() + '</section>';
+      box.innerHTML = '<section class="alert alert-calm"><h2>급하게 먹을 음식이 없어요</h2><p>가장 먼저 볼 음식은 ' + esc(first.name) + (locOf(first) !== 'fridge' ? '(' + LOC[locOf(first)] + ')' : '') + '(' + dlabel(dayDiff(first.exp)) + ')이에요.</p>' + cookBtn() + '</section>';
       return;
     }
     var exp = urgent.filter(function (i) { return dayDiff(i.exp) < 0; }).length;
@@ -768,7 +783,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     var rest = urgent.length - exp - td;
     if (rest) parts.push('3일 안에 ' + rest + '개');
     var pills = urgent.slice(0, 5).map(function (i) {
-      return '<li>' + esc(i.name) + (locOf(i) === 'freezer' ? '<em>냉동</em>' : '') + '<span>' + dlabel(dayDiff(i.exp)) + '</span></li>';
+      return '<li>' + esc(i.name) + (locOf(i) !== 'fridge' ? '<em>' + LOC[locOf(i)] + '</em>' : '') + '<span>' + dlabel(dayDiff(i.exp)) + '</span></li>';
     }).join('');
     if (urgent.length > 5) pills += '<li>외 ' + (urgent.length - 5) + '개</li>';
     box.innerHTML = '<section class="alert alert-hot' + (exp ? ' has-expired' : '') + '"><h2>' + parts.join(', ') + '</h2><ul class="pills">' + pills + '</ul>' + cookBtn() + '</section>';
@@ -814,7 +829,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     if (tab === 'fridge') {
       var act = active().filter(function (i) { return locFilter === 'all' || locOf(i) === locFilter; }).sort(byExp);
       if (!act.length) {
-        var title = locFilter === 'freezer' ? '냉동실이 비어 있어요' : locFilter === 'fridge' ? '냉장실이 비어 있어요' : '냉장고가 비어 있어요';
+        var title = locFilter === 'freezer' ? '냉동실이 비어 있어요' : locFilter === 'fridge' ? '냉장실이 비어 있어요' : locFilter === 'pantry' ? '실온 보관 음식이 없어요' : '냉장고가 비어 있어요';
         var hint = locFilter === 'all' ? '아래 “음식 추가”로 첫 음식을 넣어 보세요. 소비기한이 가까운 음식이 위에 모여요.' : '“음식 추가”에서 보관 장소를 ' + LOC[locFilter] + '으로 골라 넣어 보세요.';
         box.innerHTML = '<div class="empty">' + ICON.fridgeBig + '<h3>' + title + '</h3><p>' + hint + '</p></div>';
         return;
@@ -845,7 +860,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     var hasFz = use.some(function (i) { return locOf(i) === 'freezer'; });
     var lines = use.map(function (i) {
       var d = dayDiff(i.exp);
-      return '- ' + i.name + ' ' + fmtQty(i) + (locOf(i) === 'freezer' ? ' [냉동]' : '') + ' (' + (d === 0 ? '오늘까지' : d + '일 남음') + ')';
+      return '- ' + i.name + ' ' + fmtQty(i) + (locOf(i) === 'freezer' ? ' [냉동]' : locOf(i) === 'pantry' ? ' [실온]' : '') + ' (' + (d === 0 ? '오늘까지' : d + '일 남음') + ')';
     }).join('\n');
     var wish = cookWish.trim().replace(/[\r\n]+/g, ' ').slice(0, 60);
     return '우리 집 냉장고에 있는 재료로 만들 수 있는 요리 3가지를 추천해 주세요.\n\n' +
@@ -1250,7 +1265,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     var st = r.status === 'eaten' || r.status === 'trashed' ? r.status : 'active';
     var qty = parseFloat(r.qty);
     if (!r.id || !r.name || !(qty > 0) || !/^\d{4}-\d{2}-\d{2}$/.test(String(r.exp))) return null;
-    var out = { id: String(r.id).slice(0, 40), name: String(r.name).slice(0, 30), qty: qty, unit: UNITS.indexOf(r.unit) >= 0 ? r.unit : '개', exp: String(r.exp), loc: r.loc === 'freezer' ? 'freezer' : 'fridge', status: st, addedAt: /^\d{4}-\d{2}-\d{2}$/.test(String(r.addedAt)) ? String(r.addedAt) : iso(today()) };
+    var out = { id: String(r.id).slice(0, 40), name: String(r.name).slice(0, 30), qty: qty, unit: UNITS.indexOf(r.unit) >= 0 ? r.unit : '개', exp: String(r.exp), loc: LOC[r.loc] ? r.loc : 'fridge', status: st, addedAt: /^\d{4}-\d{2}-\d{2}$/.test(String(r.addedAt)) ? String(r.addedAt) : iso(today()) };
     out.u = Number(r.u) || 0;
     if (st !== 'active') out.doneAt = /^\d{4}-\d{2}-\d{2}$/.test(String(r.doneAt)) ? String(r.doneAt) : iso(today());
     return out;
@@ -1338,12 +1353,12 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     }).join('');
   }
   function setLoc(loc) {
-    formLoc = loc === 'freezer' ? 'freezer' : 'fridge';
+    formLoc = LOC[loc] ? loc : 'fridge';
     var btns = document.querySelectorAll('#sheet [data-act="loc"]');
     for (var i = 0; i < btns.length; i++) btns[i].setAttribute('aria-checked', btns[i].getAttribute('data-loc') === formLoc ? 'true' : 'false');
     renderChips(formLoc);
     syncChips();
-    if (!editingId) $('fSave').textContent = formLoc === 'freezer' ? '냉동실에 넣기' : '냉장실에 넣기';
+    if (!editingId) $('fSave').textContent = LOCPUT[formLoc] + ' 넣기';
   }
   function syncChips() {
     var v = $('fExp').value;
@@ -1365,7 +1380,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
     var it = id ? find(id) : null;
     editingId = it ? it.id : null;
     fillSuggestions();
-    formLoc = it ? locOf(it) : (locFilter === 'freezer' ? 'freezer' : 'fridge');
+    formLoc = it ? locOf(it) : (LOC[locFilter] ? locFilter : 'fridge');
     $('sheetTitle').textContent = it ? '음식 수정' : '음식 추가';
     $('fName').value = it ? it.name : '';
     $('fQty').value = it ? String(+it.qty) : '1';
@@ -1417,7 +1432,7 @@ button.nm { text-decoration: underline; text-decoration-color: var(--line); text
       toast(name + ' 수정했어요');
     } else {
       state.items.push({ id: uid(), name: name, qty: qty, unit: unit, exp: exp, loc: formLoc, status: 'active', addedAt: iso(today()), u: Date.now() });
-      toast(name + ' ' + LOC[formLoc] + '실에 넣었어요');
+      toast(name + ' ' + LOCPUT[formLoc] + ' 넣었어요');
     }
     closeSheet();
     commit();
